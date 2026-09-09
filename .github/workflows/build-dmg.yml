@@ -1,0 +1,175 @@
+name: Build DMG
+
+on:
+  workflow_dispatch:
+    inputs:
+      pro:
+        description: 'Include Pro features'
+        required: false
+        default: 'false'
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Swift
+        run: swift --version
+
+      - name: Install dependencies
+        run: |
+          brew install xcodegen
+
+      - name: Build app and CLI
+        run: |
+          set -euo pipefail
+
+          APP_NAME="WhatCable"
+          VERSION="1.5.0-beta.8"
+          BUILD_NUMBER="137"
+          MIN_OS="14.0"
+          CLI_PRODUCT="whatcable-cli"
+
+          DIST_DIR="dist"
+          APP_DIR="${DIST_DIR}/${APP_NAME}.app"
+          CONTENTS_DIR="${APP_DIR}/Contents"
+          MACOS_DIR="${CONTENTS_DIR}/MacOS"
+          HELPERS_DIR="${CONTENTS_DIR}/Helpers"
+          RESOURCES_DIR="${CONTENTS_DIR}/Resources"
+          PLUGINS_DIR="${CONTENTS_DIR}/PlugIns"
+          ENTITLEMENTS="scripts/${APP_NAME}.entitlements"
+          WIDGET_ENTITLEMENTS="scripts/WhatCableWidget.entitlements"
+          WIDGET_APPEX="WhatCableWidget.appex"
+
+          echo "==> Cleaning previous build"
+          rm -rf "${DIST_DIR}"
+          mkdir -p "${MACOS_DIR}" "${HELPERS_DIR}" "${RESOURCES_DIR}" "${PLUGINS_DIR}"
+
+          echo "==> Building universal release binaries"
+          swift build -c release --product "${APP_NAME}" --arch arm64 --arch x86_64
+          swift build -c release --product "${CLI_PRODUCT}" --arch arm64 --arch x86_64
+
+          BIN_PATH=$(swift build -c release --product "${APP_NAME}" --arch arm64 --arch x86_64 --show-bin-path)
+          cp "${BIN_PATH}/${APP_NAME}" "${MACOS_DIR}/${APP_NAME}"
+          cp "${BIN_PATH}/${CLI_PRODUCT}" "${HELPERS_DIR}/whatcable"
+
+          echo "==> Building widget extension"
+          xcodegen generate --quiet
+          xcodebuild build -project WhatCableWidget.xcodeproj -scheme WhatCableWidget \
+              -configuration Release \
+              -destination 'platform=macOS' \
+              CODE_SIGNING_ALLOWED=NO \
+              ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
+              MARKETING_VERSION="${VERSION}" \
+              CURRENT_PROJECT_VERSION="${BUILD_NUMBER}" \
+              -quiet
+
+          WIDGET_BUILD_DIR=$(xcodebuild -project WhatCableWidget.xcodeproj -scheme WhatCableWidget \
+              -configuration Release -showBuildSettings 2>/dev/null \
+              | grep ' BUILD_DIR = ' | awk '{print $NF}')
+          cp -R "${WIDGET_BUILD_DIR}/Release/${WIDGET_APPEX}" "${PLUGINS_DIR}/${WIDGET_APPEX}"
+
+          echo "==> Copying resources"
+          SPM_BUNDLE_NAME="WhatCable_WhatCableCore.bundle"
+          if [[ -d "Sources/WhatCableCore/Resources" ]]; then
+              mkdir -p "${RESOURCES_DIR}/${SPM_BUNDLE_NAME}"
+              cp -R "Sources/WhatCableCore/Resources/." "${RESOURCES_DIR}/${SPM_BUNDLE_NAME}/"
+          fi
+
+          APP_BUNDLE_NAME="WhatCable_WhatCable.bundle"
+          if [[ -d "Sources/WhatCable/Resources" ]]; then
+              mkdir -p "${RESOURCES_DIR}/${APP_BUNDLE_NAME}"
+              cp -R "Sources/WhatCable/Resources/." "${RESOURCES_DIR}/${APP_BUNDLE_NAME}/"
+          fi
+
+          NOTIFICATIONS_BUNDLE_NAME="WhatCable_WhatCableNotifications.bundle"
+          if [[ -d "Sources/WhatCableNotifications/Resources" ]]; then
+              mkdir -p "${RESOURCES_DIR}/${NOTIFICATIONS_BUNDLE_NAME}"
+              cp -R "Sources/WhatCableNotifications/Resources/." "${RESOURCES_DIR}/${NOTIFICATIONS_BUNDLE_NAME}/"
+          fi
+
+          TUIKIT_BUNDLE_NAME="TUIkit_TUIkit.bundle"
+          if [[ -d "${BIN_PATH}/${TUIKIT_BUNDLE_NAME}" ]]; then
+              cp -R "${BIN_PATH}/${TUIKIT_BUNDLE_NAME}" "${RESOURCES_DIR}/${TUIKIT_BUNDLE_NAME}"
+          fi
+
+          echo "==> Copying app icon"
+          cp "scripts/AppIcon.icns" "${RESOURCES_DIR}/AppIcon.icns"
+
+          echo "==> Building probes"
+          PROBES_DEST_DIR="${RESOURCES_DIR}/probes"
+          if [[ -d "probes/test-kit" ]]; then
+              mkdir -p "${PROBES_DEST_DIR}"
+              for src in "probes/test-kit"/*.c; do
+                  name=$(basename "${src}" .c)
+                  clang -arch arm64 -arch x86_64 \
+                      -framework IOKit -framework CoreFoundation \
+                      -mmacosx-version-min="${MIN_OS}" \
+                      -O2 -o "${PROBES_DEST_DIR}/${name}" "${src}"
+              done
+          fi
+
+          echo "==> Writing Info.plist"
+          cat > "${CONTENTS_DIR}/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleDevelopmentRegion</key>
+              <string>en</string>
+              <key>CFBundleExecutable</key>
+              <string>WhatCable</string>
+              <key>CFBundleIconFile</key>
+              <string>AppIcon</string>
+              <key>CFBundleIdentifier</key>
+              <string>uk.whatcable.whatcable</string>
+              <key>CFBundleInfoDictionaryVersion</key>
+              <string>6.0</string>
+              <key>CFBundleName</key>
+              <string>WhatCable</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>1.5.0-beta.8</string>
+              <key>CFBundleVersion</key>
+              <string>137</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>14.0</string>
+              <key>NSHighResolutionCapable</key>
+              <true/>
+          </dict>
+          </plist>
+          PLIST
+
+          printf "APPL????" > "${CONTENTS_DIR}/PkgInfo"
+
+          echo "==> Ad-hoc signing"
+          codesign --force --sign - "${HELPERS_DIR}/whatcable"
+          if [[ -d "${RESOURCES_DIR}/probes" ]]; then
+              for probe in "${RESOURCES_DIR}/probes"/*; do
+                  codesign --force --sign - "${probe}"
+              done
+          fi
+          codesign --force --entitlements "${WIDGET_ENTITLEMENTS}" --sign - "${PLUGINS_DIR}/${WIDGET_APPEX}"
+          codesign --force --entitlements "${ENTITLEMENTS}" --sign - "${APP_DIR}"
+
+      - name: Create DMG
+        run: |
+          DIST_DIR="dist"
+          DMG_TEMP=$(mktemp -d)
+          trap "rm -rf ${DMG_TEMP}" EXIT
+
+          cp -R "${DIST_DIR}/WhatCable.app" "${DMG_TEMP}/"
+          ln -s /Applications "${DMG_TEMP}/Applications"
+
+          hdiutil create -volname "WhatCable" -srcfolder "${DMG_TEMP}" -ov -format UDZO "${DIST_DIR}/WhatCable.dmg"
+
+          ls -lh "${DIST_DIR}/WhatCable.dmg"
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WhatCable.dmg
+          path: dist/WhatCable.dmg
+          retention-days: 30
