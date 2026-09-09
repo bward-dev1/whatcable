@@ -32,14 +32,11 @@ jobs:
           MACOS_DIR="${CONTENTS_DIR}/MacOS"
           HELPERS_DIR="${CONTENTS_DIR}/Helpers"
           RESOURCES_DIR="${CONTENTS_DIR}/Resources"
-          PLUGINS_DIR="${CONTENTS_DIR}/PlugIns"
           ENTITLEMENTS="scripts/${APP_NAME}.entitlements"
-          WIDGET_ENTITLEMENTS="scripts/WhatCableWidget.entitlements"
-          WIDGET_APPEX="WhatCableWidget.appex"
 
           echo "==> Cleaning previous build"
           rm -rf "${DIST_DIR}"
-          mkdir -p "${MACOS_DIR}" "${HELPERS_DIR}" "${RESOURCES_DIR}" "${PLUGINS_DIR}"
+          mkdir -p "${MACOS_DIR}" "${HELPERS_DIR}" "${RESOURCES_DIR}"
 
           echo "==> Building universal release binaries"
           swift build -c release --product "${APP_NAME}" --arch arm64 --arch x86_64
@@ -49,21 +46,7 @@ jobs:
           cp "${BIN_PATH}/${APP_NAME}" "${MACOS_DIR}/${APP_NAME}"
           cp "${BIN_PATH}/${CLI_PRODUCT}" "${HELPERS_DIR}/whatcable"
 
-          echo "==> Building widget extension"
-          xcodegen generate --quiet
-          xcodebuild -resolvePackageDependencies -project WhatCableWidget.xcodeproj
-          xcodebuild build -project WhatCableWidget.xcodeproj -scheme WhatCableWidget \
-              -configuration Release \
-              -destination 'platform=macOS' \
-              CODE_SIGNING_ALLOWED=NO \
-              ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
-              MARKETING_VERSION="${VERSION}" \
-              CURRENT_PROJECT_VERSION="${BUILD_NUMBER}"
-
-          WIDGET_BUILD_DIR=$(xcodebuild -project WhatCableWidget.xcodeproj -scheme WhatCableWidget \
-              -configuration Release -showBuildSettings 2>/dev/null \
-              | grep ' BUILD_DIR = ' | awk '{print $NF}')
-          cp -R "${WIDGET_BUILD_DIR}/Release/${WIDGET_APPEX}" "${PLUGINS_DIR}/${WIDGET_APPEX}"
+          echo "==> Skipping widget extension (SPM dependency resolution issue)"
 
           echo "==> Copying resources"
           SPM_BUNDLE_NAME="WhatCable_WhatCableCore.bundle"
@@ -146,7 +129,6 @@ jobs:
                   codesign --force --sign - "${probe}"
               done
           fi
-          codesign --force --entitlements "${WIDGET_ENTITLEMENTS}" --sign - "${PLUGINS_DIR}/${WIDGET_APPEX}"
           codesign --force --entitlements "${ENTITLEMENTS}" --sign - "${APP_DIR}"
 
       - name: Create DMG
