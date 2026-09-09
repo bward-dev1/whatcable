@@ -1,12 +1,7 @@
-name: Build DMG
+name: Build DMG Pro
 
 on:
   workflow_dispatch:
-    inputs:
-      pro:
-        description: 'Include Pro features'
-        required: false
-        default: 'false'
 
 jobs:
   build:
