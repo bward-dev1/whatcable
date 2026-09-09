@@ -9,14 +9,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Swift
-        run: swift --version
-
-      - name: Install dependencies
-        run: |
-          brew install xcodegen
-
-      - name: Build app and CLI
+      - name: Build and create DMG
         run: |
           set -euo pipefail
 
@@ -34,11 +27,9 @@ jobs:
           RESOURCES_DIR="${CONTENTS_DIR}/Resources"
           ENTITLEMENTS="scripts/${APP_NAME}.entitlements"
 
-          echo "==> Cleaning previous build"
           rm -rf "${DIST_DIR}"
           mkdir -p "${MACOS_DIR}" "${HELPERS_DIR}" "${RESOURCES_DIR}"
 
-          echo "==> Building universal release binaries"
           swift build -c release --product "${APP_NAME}" --arch arm64 --arch x86_64
           swift build -c release --product "${CLI_PRODUCT}" --arch arm64 --arch x86_64
 
@@ -46,50 +37,39 @@ jobs:
           cp "${BIN_PATH}/${APP_NAME}" "${MACOS_DIR}/${APP_NAME}"
           cp "${BIN_PATH}/${CLI_PRODUCT}" "${HELPERS_DIR}/whatcable"
 
-          echo "==> Skipping widget extension (SPM dependency resolution issue)"
-
-          echo "==> Copying resources"
-          SPM_BUNDLE_NAME="WhatCable_WhatCableCore.bundle"
           if [[ -d "Sources/WhatCableCore/Resources" ]]; then
-              mkdir -p "${RESOURCES_DIR}/${SPM_BUNDLE_NAME}"
-              cp -R "Sources/WhatCableCore/Resources/." "${RESOURCES_DIR}/${SPM_BUNDLE_NAME}/"
+              mkdir -p "${RESOURCES_DIR}/WhatCable_WhatCableCore.bundle"
+              cp -R "Sources/WhatCableCore/Resources/." "${RESOURCES_DIR}/WhatCable_WhatCableCore.bundle/"
           fi
 
-          APP_BUNDLE_NAME="WhatCable_WhatCable.bundle"
           if [[ -d "Sources/WhatCable/Resources" ]]; then
-              mkdir -p "${RESOURCES_DIR}/${APP_BUNDLE_NAME}"
-              cp -R "Sources/WhatCable/Resources/." "${RESOURCES_DIR}/${APP_BUNDLE_NAME}/"
+              mkdir -p "${RESOURCES_DIR}/WhatCable_WhatCable.bundle"
+              cp -R "Sources/WhatCable/Resources/." "${RESOURCES_DIR}/WhatCable_WhatCable.bundle/"
           fi
 
-          NOTIFICATIONS_BUNDLE_NAME="WhatCable_WhatCableNotifications.bundle"
           if [[ -d "Sources/WhatCableNotifications/Resources" ]]; then
-              mkdir -p "${RESOURCES_DIR}/${NOTIFICATIONS_BUNDLE_NAME}"
-              cp -R "Sources/WhatCableNotifications/Resources/." "${RESOURCES_DIR}/${NOTIFICATIONS_BUNDLE_NAME}/"
+              mkdir -p "${RESOURCES_DIR}/WhatCable_WhatCableNotifications.bundle"
+              cp -R "Sources/WhatCableNotifications/Resources/." "${RESOURCES_DIR}/WhatCable_WhatCableNotifications.bundle/"
           fi
 
-          TUIKIT_BUNDLE_NAME="TUIkit_TUIkit.bundle"
-          if [[ -d "${BIN_PATH}/${TUIKIT_BUNDLE_NAME}" ]]; then
-              cp -R "${BIN_PATH}/${TUIKIT_BUNDLE_NAME}" "${RESOURCES_DIR}/${TUIKIT_BUNDLE_NAME}"
+          if [[ -d "${BIN_PATH}/TUIkit_TUIkit.bundle" ]]; then
+              cp -R "${BIN_PATH}/TUIkit_TUIkit.bundle" "${RESOURCES_DIR}/"
           fi
 
-          echo "==> Copying app icon"
           cp "scripts/AppIcon.icns" "${RESOURCES_DIR}/AppIcon.icns"
 
-          echo "==> Building probes"
-          PROBES_DEST_DIR="${RESOURCES_DIR}/probes"
           if [[ -d "probes/test-kit" ]]; then
-              mkdir -p "${PROBES_DEST_DIR}"
+              mkdir -p "${RESOURCES_DIR}/probes"
               for src in "probes/test-kit"/*.c; do
                   name=$(basename "${src}" .c)
                   clang -arch arm64 -arch x86_64 \
                       -framework IOKit -framework CoreFoundation \
                       -mmacosx-version-min="${MIN_OS}" \
-                      -O2 -o "${PROBES_DEST_DIR}/${name}" "${src}"
+                      -O2 -o "${RESOURCES_DIR}/probes/${name}" "${src}"
               done
           fi
 
-          echo "==> Writing Info.plist"
-          cat > "${CONTENTS_DIR}/Info.plist" <<'PLIST'
+          cat > "${CONTENTS_DIR}/Info.plist" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -109,20 +89,19 @@ jobs:
               <key>CFBundlePackageType</key>
               <string>APPL</string>
               <key>CFBundleShortVersionString</key>
-              <string>1.5.0-beta.8</string>
+              <string>${VERSION}</string>
               <key>CFBundleVersion</key>
-              <string>137</string>
+              <string>${BUILD_NUMBER}</string>
               <key>LSMinimumSystemVersion</key>
-              <string>14.0</string>
+              <string>${MIN_OS}</string>
               <key>NSHighResolutionCapable</key>
               <true/>
           </dict>
           </plist>
-          PLIST
+          EOF
 
           printf "APPL????" > "${CONTENTS_DIR}/PkgInfo"
 
-          echo "==> Ad-hoc signing"
           codesign --force --sign - "${HELPERS_DIR}/whatcable"
           if [[ -d "${RESOURCES_DIR}/probes" ]]; then
               for probe in "${RESOURCES_DIR}/probes"/*; do
@@ -131,20 +110,13 @@ jobs:
           fi
           codesign --force --entitlements "${ENTITLEMENTS}" --sign - "${APP_DIR}"
 
-      - name: Create DMG
-        run: |
-          DIST_DIR="dist"
           DMG_TEMP=$(mktemp -d)
           trap "rm -rf ${DMG_TEMP}" EXIT
-
-          cp -R "${DIST_DIR}/WhatCable.app" "${DMG_TEMP}/"
+          cp -R "${APP_DIR}" "${DMG_TEMP}/"
           ln -s /Applications "${DMG_TEMP}/Applications"
-
           hdiutil create -volname "WhatCable" -srcfolder "${DMG_TEMP}" -ov -format UDZO "${DIST_DIR}/WhatCable.dmg"
 
-          ls -lh "${DIST_DIR}/WhatCable.dmg"
-
-      - name: Upload DMG artifact
+      - name: Upload DMG
         uses: actions/upload-artifact@v4
         with:
           name: WhatCable.dmg
