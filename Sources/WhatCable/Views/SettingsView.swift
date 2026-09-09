@@ -166,20 +166,6 @@ struct SettingsForm: View {
             } header: {
                 sectionHeader("COMMUNITY")
             }
-
-            Section {
-                let builders = PluginRegistry.shared.settingsProSectionBuilders
-                if builders.isEmpty {
-                    Link(String(localized: "Upgrade to WhatCable Pro", bundle: _appLocalizedBundle),
-                         destination: URL(string: "https://www.whatcable.uk/pro")!)
-                } else {
-                    ForEach(builders.indices, id: \.self) { i in
-                        builders[i]()
-                    }
-                }
-            } header: {
-                sectionHeader("Pro")
-            }
         }
         .formStyle(.grouped)
         .scaledFont(.body)
